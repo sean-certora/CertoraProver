@@ -86,6 +86,7 @@ pip install -r scripts/certora_cli_requirements.txt
 
 ## Running
 
+
 - You can run the tool by running `certoraRun.py -h` to see all the options.
     - There are several small examples for testing under `Public/TestEVM`. For example, you can run one of these like so:
   ```commandline
@@ -93,6 +94,8 @@ pip install -r scripts/certora_cli_requirements.txt
         certoraRun.py Default.conf
    ```
     - Please refer to the user guide for details on how to run the prover on real-world smart contracts: https://docs.certora.com/en/latest/docs/user-guide/index.html
+
+- Make sure you are running the `certoraRun.py` script in the directory defined in the `CERTORA` environment variable not the one in the local repo at `scripts/certoraRun.py`
 
 - You can run unit tests directly from IDEs like IntelliJ, or from the command line with `./gradlew test --tests <name_of_test_with_wildcards>`
     - These tests are in `CertoraProver/src/test` (and also in the test directories of the various subprojects)
