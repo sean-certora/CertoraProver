@@ -1,2 +1,16 @@
 .idea/
-
+.gradle
+fried-egg/
+__pycache__
+ASTExtraction/build/
+PrefixGen/build/
+Public/
+Typechecker/build/
+build/
+lib/DetektRules/build/
+lib/GeneralUtils/build/
+lib/KspGeneration/build/
+lib/SMTLIBUtils/build/
+lib/Shared/build/
+lib/TestUtils/build/
+scripts/Gimli-DWARF-JSONDump/target/
