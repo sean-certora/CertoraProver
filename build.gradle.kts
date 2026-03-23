@@ -1027,8 +1027,36 @@ tasks {
 			if (!Os.isFamily(Os.FAMILY_WINDOWS)) {
 				installPath.get().resolve(".certora_python/install/bin/python3").setExecutable(true)
 			}
+
+		// Generate wrapper scripts for all Python entry points
+		val wrapperTemplate = """#!/bin/sh
+# Wrapper script to find and execute bundled Python
+SCRIPT_DIR="${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)"
+BUNDLED_PYTHON="${'$'}SCRIPT_DIR/.certora_python/install/bin/python3"
+SCRIPT_NAME="${'$'}(basename "${'$'}0").py"
+
+if [ -x "${'$'}BUNDLED_PYTHON" ]; then
+    exec "${'$'}BUNDLED_PYTHON" "${'$'}SCRIPT_DIR/${'$'}SCRIPT_NAME" "${'$'}@"
+else
+    exec python3 "${'$'}SCRIPT_DIR/${'$'}SCRIPT_NAME" "${'$'}@"
+fi
+"""
+		val installDir = installPath.get()
+		val pythonScripts = listOf(
+			"certoraRun", "certoraSolanaProver", "certoraSorobanProver", "certoraSuiProver",
+			"certoraEVMProver", "certoraRanger", "certoraConcord", "certoraConcordance",
+			"certoraMutate", "rustMutator", "certoraEqCheck", "certoraCVLFormatter",
+			"CallTraceRefresher", "certora_cli_publish", "generateMutant", "localRegtest"
+		)
+		for (scriptName in pythonScripts) {
+			val wrapperPath = installDir.resolve(scriptName)
+			wrapperPath.writeText(wrapperTemplate)
+			if (!Os.isFamily(Os.FAMILY_WINDOWS)) {
+				wrapperPath.setExecutable(true)
+			}
 		}
 	}
+}
 
 	val gradleVersionTask = register<Task>("git-version-resource") {
 		if(!project.hasProperty("testing")) {
