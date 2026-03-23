@@ -14,6 +14,12 @@
 #     You should have received a copy of the GNU General Public License
 #     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+# Bootstrap: use bundled Python if available
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from Shared.certoraBootstrap import maybe_reexec_into_bundled_python
+maybe_reexec_into_bundled_python()
 
 import os
 import sys
