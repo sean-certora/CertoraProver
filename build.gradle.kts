@@ -2,6 +2,7 @@ import com.google.devtools.ksp.gradle.KspTask
 import com.google.devtools.ksp.gradle.KspTaskJvm
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
+import java.nio.file.Paths
 import java.util.Properties as Prop
 import java.time.Duration
 import org.apache.tools.ant.taskdefs.condition.Os
@@ -17,6 +18,20 @@ import org.junit.platform.launcher.TagFilter.*
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import io.github.detekt.gradle.extensions.KotlinCompileTaskDetektExtension
 import me.champeau.jmh.JMHTask
+
+// Maps the current build host to the correct python-build-standalone asset triple.
+// Format: Triple(os, arch, flavor) matching asset filename convention.
+fun pythonStandaloneTriple(): Triple<String, String, String> {
+	val arch = when (System.getProperty("os.arch")) {
+		"aarch64", "arm64" -> "aarch64"
+		else               -> "x86_64"
+	}
+	return when {
+		Os.isFamily(Os.FAMILY_WINDOWS) -> Triple("windows", arch, "pgo")
+		Os.isFamily(Os.FAMILY_MAC)     -> Triple("apple-darwin", arch, "pgo+lto")
+		else                           -> Triple("unknown-linux-gnu", arch, "lto")
+	}
+}
 
 plugins {
 	kotlin("jvm") version "${property("kotlin.version")}"
@@ -63,6 +78,8 @@ buildscript {
 		classpath("com.github.vbmacher:java-cup:11b-20160615")
 		classpath("de.jflex:jflex:1.7.0")
 		classpath("org.junit.platform:junit-platform-launcher:1.10.0-M1")
+		classpath("org.apache.commons:commons-compress:1.26.1")
+		classpath("com.github.luben:zstd-jni:1.5.6-1")
 	}
 }
 
@@ -498,6 +515,113 @@ allprojects {
 	}
 }
 
+// Bundled Python installation tasks
+val pythonVersion     = project.property("certora.python.version").toString()
+val pythonBuild       = project.property("certora.python.build").toString()
+val (osTriple, archTriple, flavorTriple) = pythonStandaloneTriple()
+val pythonAsset = "cpython-${pythonVersion}+${pythonBuild}-${archTriple}-${osTriple}-${flavorTriple}-full.tar.zst"
+val pythonUrl   = "https://github.com/astral-sh/python-build-standalone/releases/download/${pythonBuild}/${pythonAsset}"
+val pythonTarball = file("${gradle.gradleUserHomeDir}/caches/certora-python/${pythonAsset}")
+val pythonInstallDir = file("${project.buildDir}/certora-python-install")
+
+val downloadPython = tasks.register("download-python") {
+	outputs.file(pythonTarball)
+	outputs.upToDateWhen { pythonTarball.exists() }
+
+	doLast {
+		pythonTarball.parentFile.mkdirs()
+		if (!pythonTarball.exists()) {
+			logger.lifecycle("Downloading bundled Python from ${pythonUrl.substringAfterLast("/")} ...")
+			uri(pythonUrl).toURL().openStream().use { input ->
+				pythonTarball.outputStream().use { output -> input.copyTo(output) }
+			}
+			logger.lifecycle("Download complete: ${pythonTarball.length() / 1_048_576}MB")
+		}
+	}
+}
+
+val installPython = tasks.register("install-python") {
+	dependsOn(downloadPython)
+	inputs.file(pythonTarball)
+	outputs.dir(pythonInstallDir)
+	outputs.upToDateWhen {
+		val binary = if (Os.isFamily(Os.FAMILY_WINDOWS))
+			pythonInstallDir.resolve("python/Scripts/python.exe")
+		else
+			pythonInstallDir.resolve("python/install/bin/python3")
+		binary.exists()
+	}
+
+	doLast {
+		if (pythonInstallDir.exists()) pythonInstallDir.deleteRecursively()
+		pythonInstallDir.mkdirs()
+
+		logger.lifecycle("Extracting bundled Python...")
+		// Use Apache Commons Compress for .tar.zst extraction
+		pythonTarball.inputStream().use { fileInput ->
+			com.github.luben.zstd.ZstdInputStream(fileInput).use { zstdInput ->
+				org.apache.commons.compress.archivers.tar.TarArchiveInputStream(zstdInput).use { tarInput ->
+					var entry = tarInput.nextTarEntry
+					val buffer = ByteArray(4096)
+					while (entry != null) {
+						val dest = pythonInstallDir.resolve(entry.name)
+						when {
+							entry.isDirectory -> {
+								dest.mkdirs()
+							}
+							entry.isSymbolicLink -> {
+								// Extract symlinks: create a link from dest to linkName
+								dest.parentFile.mkdirs()
+								val linkTarget = entry.linkName
+								// Use Java NIO to create symlink (cross-platform safe)
+								try {
+									Files.createSymbolicLink(dest.toPath(), Paths.get(linkTarget))
+								} catch (e: Exception) {
+									// If symlink creation fails, skip (some filesystems don't support it)
+									logger.lifecycle("Warning: Could not create symlink $dest -> $linkTarget: ${e.message}")
+								}
+							}
+							else -> {
+								// Regular file
+								dest.parentFile.mkdirs()
+								dest.outputStream().use { output ->
+									var len: Int
+									while (tarInput.read(buffer).also { len = it } > 0) {
+										output.write(buffer, 0, len)
+									}
+								}
+							}
+						}
+						// Preserve Unix executable bits
+						if (!Os.isFamily(Os.FAMILY_WINDOWS)) {
+							val perms = entry.mode and 0b111111111
+							dest.setExecutable((perms and 0b001001001) != 0, false)
+						}
+						entry = tarInput.nextTarEntry
+					}
+				}
+			}
+		}
+
+		// Install Python dependencies
+		val python = if (Os.isFamily(Os.FAMILY_WINDOWS))
+			pythonInstallDir.resolve("python/Scripts/python.exe").absolutePath
+		else
+			pythonInstallDir.resolve("python/install/bin/python3").absolutePath
+
+		val requirementsFile = project.file("scripts/certora_cli_requirements.txt")
+		logger.lifecycle("Installing Python dependencies...")
+		exec {
+			commandLine(
+				python, "-m", "pip", "install",
+				"--no-warn-script-location",
+				"-r", requirementsFile.absolutePath
+			)
+		}
+		logger.lifecycle("Bundled Python installation complete.")
+	}
+}
+
 val optimizerName = if (Os.isFamily(Os.FAMILY_WINDOWS)) {
 	"tac_optimizer.exe"
 } else {
@@ -874,6 +998,7 @@ tasks {
 	}
 
 	val copy = register<Copy>("copy-assets") {
+		dependsOn(installPython)
 		into(installPath)
 		from(shadowJar.get().outputs) {
 			rename("-${project.property("version")}-jar-with-dependencies","")
@@ -881,6 +1006,13 @@ tasks {
 		from(scripts)
 		from(egg)
 		from(dwarfJsonDump)
+		// Copy the extracted Python to .certora_python, stripping the "python/" directory
+		// pythonInstallDir contains: python/install, python/licenses, python/build, etc.
+		// We want .certora_python/install, .certora_python/licenses, .certora_python/build, etc.
+		from(pythonInstallDir.resolve("python")) {
+			into(".certora_python")
+			includeEmptyDirs = false
+		}
 
 		doFirst {
 			delete(installPath.get().resolve(optimizerName))
@@ -891,8 +1023,40 @@ tasks {
 			certoraRunPath.setExecutable(true)
 			val certoraEqCheckPath = installPath.get().resolve("certoraEqCheck.py")
 			certoraEqCheckPath.setExecutable(true)
+			// Make bundled Python executable
+			if (!Os.isFamily(Os.FAMILY_WINDOWS)) {
+				installPath.get().resolve(".certora_python/install/bin/python3").setExecutable(true)
+			}
+
+		// Generate wrapper scripts for all Python entry points
+		val wrapperTemplate = """#!/bin/sh
+# Wrapper script to find and execute bundled Python
+SCRIPT_DIR="${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)"
+BUNDLED_PYTHON="${'$'}SCRIPT_DIR/.certora_python/install/bin/python3"
+SCRIPT_NAME="${'$'}(basename "${'$'}0").py"
+
+if [ -x "${'$'}BUNDLED_PYTHON" ]; then
+    exec "${'$'}BUNDLED_PYTHON" "${'$'}SCRIPT_DIR/${'$'}SCRIPT_NAME" "${'$'}@"
+else
+    exec python3 "${'$'}SCRIPT_DIR/${'$'}SCRIPT_NAME" "${'$'}@"
+fi
+"""
+		val installDir = installPath.get()
+		val pythonScripts = listOf(
+			"certoraRun", "certoraSolanaProver", "certoraSorobanProver", "certoraSuiProver",
+			"certoraEVMProver", "certoraRanger", "certoraConcord", "certoraConcordance",
+			"certoraMutate", "rustMutator", "certoraEqCheck", "certoraCVLFormatter",
+			"CallTraceRefresher", "certora_cli_publish", "generateMutant", "localRegtest"
+		)
+		for (scriptName in pythonScripts) {
+			val wrapperPath = installDir.resolve(scriptName)
+			wrapperPath.writeText(wrapperTemplate)
+			if (!Os.isFamily(Os.FAMILY_WINDOWS)) {
+				wrapperPath.setExecutable(true)
+			}
 		}
 	}
+}
 
 	val gradleVersionTask = register<Task>("git-version-resource") {
 		if(!project.hasProperty("testing")) {

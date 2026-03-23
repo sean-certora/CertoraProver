@@ -1,6 +1,7 @@
 .idea/
 .gradle
 fried-egg/
+.certora_internal/
 __pycache__
 ASTExtraction/build/
 PrefixGen/build/

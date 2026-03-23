@@ -73,14 +73,8 @@ The instructions here are for users on Mac OS and Linux.
 
 * Make sure the path you used to set the variable `CERTORA` has important jars, scripts, and binaries like `emv.jar`, `certoraRun.py`, `tac_optimizer`.
 
-### Troubleshooting
-- We recommend working from within a python virtual environment and installing all dependencies there:
-```commandline
-cd CertoraProver
-python -m venv .venv
-source .venv/bin/activate
-pip install -r scripts/certora_cli_requirements.txt
-```
+### Notes
+- The build includes a bundled Python installation with all dependencies pre-installed. After running `./gradlew assemble`, you can run scripts immediately—no additional Python setup is required.
 - If you have `Crypto` installed, you may first need to uninstall (`pip uninstall crypto`) before installing `pycryptodome`
 - You can make sure `tac_optimizer` builds correctly by `cd`ing in to the `fried-egg` directory and running `cargo build --release`. Also make sure `tac_optimizer` is in your path (set using `CERTORA`).
 
